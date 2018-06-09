@@ -10,15 +10,22 @@ Simply run the program from the shell as follows:
     ./rp3-tcx.py workout.CSV
 
 This will create a new file of the same name but with a TCX extension
-in the same directory as the CSV file, ie workout.tcx.
+in the same directory as the CSV file, i.e. workout.tcx
+
+Set the UTC start time of the workout by using the -t flag
+along with the ISO date and time as follows:
+
+    ./rp3-tcx.py [-t 2018-05-14_15:30:00] workout.CSV
+
+Otherwise, the system time is used as the start time.
+(This is necessary because RP3 doesn't include the time in the csv file.)
 
 This is very much inspired by Thomas O'Dowd's work with Lemond trainers.
-: https://github.com/tpodowd/lemondcsv
+    https://github.com/tpodowd/lemondcsv
 
-Work In Progress
 """
 
-# TODO: Handle strange intervals gracefully - would be nice if RP3 indicated whether interval was Active or Resting intensity
+# TODO: Handle intervals gracefully
 
 import os
 import sys
@@ -28,7 +35,6 @@ import getopt
 from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement
 
-SUPPORTED_FIRMWARE = [63]
 
 XSI = 'http://www.w3.org/2001/XMLSchema-instance'
 XSD = 'http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd'
@@ -273,22 +279,21 @@ def output_name(iname):
 
 
 def usage_exit():
-    sys.stderr.write("Usage: rp3-tcx.py [-f workout.tcx -t yyyy mm dd hh:MM:ss] workout.csv\n")
+    sys.stderr.write("Usage: rp3-tcx.py [-f workout.tcx -t yyyy-mm-dd_hh:MM:ss] workout.csv\n")
     sys.exit(1)
 
-opts, args = getopt.getopt(sys.argv[1:], 'f:h')
+opts, args = getopt.getopt(sys.argv[1:], 'f:t:h')
 oname = None
 workout_start = time.gmtime()
 for opt, arg in opts:
     if opt == '-f':
         oname = arg
     elif opt == '-t':
-        workout_start = time.strptime(arg, "%Y %m %d %H:%M:%S")
+        workout_start = time.strptime(arg, "%Y-%m-%d_%H:%M:%S")
     elif opt == '-h':
         usage_exit()
 
 if len(args) != 1:
-    # TODO: support multiple CSV files to join them up to one TCX.
     usage_exit()
 else:
     iname = args[0]

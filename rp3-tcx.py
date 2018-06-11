@@ -44,8 +44,8 @@ EXT_NS = 'http://www.garmin.com/xmlschemas/ActivityExtension/v2'
 
 class Stroke:
     """
-    The Power Pilot logs a data point every second with information
-    such as speed, distance, heartrate, power etc. This object
+    The RP3 Dynamic Rower logs a data point every stroke with information
+    such as pace, distance, heartrate, power etc. This object
     represents one particular data point.
     """
     def __init__(self, csvrow):
@@ -56,16 +56,24 @@ class Stroke:
         self.heart = int(csvrow[14])
         self.cadence = int(float(csvrow[6]))
         self.calories = int(self.kJToCalories(float(csvrow[13])))
+        self.interval_id = int(csvrow[1])
+
+        def __str__(self):
+            return "%d %f %d" % (self.secs, self.speed, self.power)
 
     def paceToSpeed(self, pace):
         # Converting the time per 500m to m/s
-        return 500 / pace
+        meters_per_sec = 0
+        if pace > 0:
+            meters_per_sec = 500 / pace
+
+        return meters_per_sec
 
     def kJToCalories(self, kJ):
         return kJ / 4.184
 
-    def __str__(self):
-        return "%d %f %d" % (self.secs, self.speed, self.power)
+    def getIntervalID(self):
+        return self.interval_id
 
     def trackpointElement(self, start):
         tp = Element('Trackpoint')
@@ -128,31 +136,34 @@ class Stroke:
             raise Exception("Unexpected Header %s != %s" % (exp, csvrow))
 
 
-class Workout:
+class Interval:
     """
-    The object represents the complete Lemond Workout workout file.
+    A single workout may be split into different intervals on the rower.
+    This object represents a single interval, though the CSV doesn't
+    distinguish between resting and active intervals so they are all treated equally here.
     """
-    def __init__(self, file, start_time):
+
+    def __init__(self, ID, lap_startsec):
+        self.startsec = lap_startsec
+        self.endsec = lap_startsec
+
         self.maxSpeed = 0
         self.maxHeart = 0
         self.maxCadence = 0
         self.maxWatts = 0
-        self.ttlDist = 0 # meters
+        self.ttlDist = 0
 
-        self.startsec = time.mktime(start_time)
-        self.readCSV(file)
+        self.interval_id = ID
 
-    def readCSV(self, file):
-        fp = open(file, 'rt')
-        rdr = csv.reader(fp)
-        Stroke.parseStrokeHdr(next(rdr))
         self.points = []
-        for row in rdr:
-            p = Stroke(row)
-            self.points.append(p)
-            self.collectStats(p)
+
+    def addStroke(self, s):
+        self.points.append(s)
+        self.collectStats(s)
 
     def collectStats(self, p):
+        self.endsec = self.startsec + p.secs
+
         if p.speed > self.maxSpeed:
             self.maxSpeed = p.speed
         if p.heart > self.maxHeart:
@@ -161,6 +172,74 @@ class Workout:
             self.maxCadence = p.cadence
         if p.power > self.maxWatts:
             self.maxWatts = p.power
+
+    def getIntervalID(self):
+        return self.interval_id
+
+    def addLap(self, act):
+        st = Workout.isoTimestamp(self.startsec)
+        lap = SubElement(act, 'Lap', {'StartTime': st})
+        last = len(self.points) - 1
+        tts = SubElement(lap, 'TotalTimeSeconds')
+        tts.text = str(self.points[last].secs)
+        dist = SubElement(lap, 'DistanceMeters')
+        dist.text = str(self.points[last].dist)
+        ms = SubElement(lap, 'MaximumSpeed')
+        ms.text = str(self.maxSpeed)
+        calories = SubElement(lap, 'Calories')
+        calories.text = str(self.points[last].calories)
+        maxheart = SubElement(lap, 'MaximumHeartRateBpm')
+        maxheartvalue = SubElement(maxheart, 'Value')
+        maxheartvalue.text = str(self.maxHeart)
+        intensity = SubElement(lap, 'Intensity')
+        intensity.text = 'Active'
+        trigger = SubElement(lap, 'TriggerMethod')
+        trigger.text = 'Manual'
+        lap.append(self.trackElement())
+
+    def LapExtension(self, ext, tag, text):
+        tpx = SubElement(ext, 'LX', {'xmlns': EXT_NS})
+        value = SubElement(tpx, tag)
+        value.text = str(text)
+
+    def trackElement(self):
+        t = Element('Track')
+        for p in self.points:
+            t.append(p.trackpointElement(self.startsec))
+        return t
+
+
+class Workout:
+    """
+    The object represents the complete RP3 workout file.
+    """
+    def __init__(self, file, start_time):
+        self.intervals = []
+        self.startsec = time.mktime(start_time)
+
+        self.readCSV(file)
+
+    def readCSV(self, file):
+        fp = open(file, 'rt')
+        rdr = csv.reader(fp)
+        Stroke.parseStrokeHdr(next(rdr))
+        for row in rdr:
+            p = Stroke(row)
+            ID = p.getIntervalID()
+
+            interval = None
+            current_ID = 0
+            end_time = self.startsec
+            if self.intervals:
+                interval = self.intervals[-1]
+                current_ID = interval.getIntervalID()
+                end_time = interval.endsec
+
+            if (ID > current_ID):
+                interval = Interval(ID, end_time)
+                self.intervals.append(interval)
+
+            interval.addStroke(p)
 
     @staticmethod
     def isoTimestamp(seconds):
@@ -191,7 +270,9 @@ class Workout:
         act = SubElement(acts, 'Activity', {'Sport': 'Rowing'})
         id = SubElement(act, 'Id')
         id.text = Workout.isoTimestamp(self.startsec)
-        self.addLap(act)
+        for interval in self.intervals:
+            interval.addLap(act)
+
         self.addCreator(act)
 
     def addCreator(self, act):
@@ -231,42 +312,9 @@ class Workout:
         partnum = SubElement(a, 'PartNumber')
         partnum.text = 'none'
 
-    # Will have to properly add laps
-    def addLap(self, act):
-        st = Workout.isoTimestamp(self.startsec)
-        lap = SubElement(act, 'Lap', {'StartTime': st})
-        last = len(self.points) - 1
-        tts = SubElement(lap, 'TotalTimeSeconds')
-        tts.text = str(self.points[last].secs)
-        dist = SubElement(lap, 'DistanceMeters')
-        dist.text = str(self.points[last].dist)
-        ms = SubElement(lap, 'MaximumSpeed')
-        ms.text = str(self.maxSpeed)
-        calories = SubElement(lap, 'Calories')
-        calories.text = str(self.points[last].calories)
-        maxheart = SubElement(lap, 'MaximumHeartRateBpm')
-        maxheartvalue = SubElement(maxheart, 'Value')
-        maxheartvalue.text = str(self.maxHeart)
-        intensity = SubElement(lap, 'Intensity')
-        intensity.text = 'Active'
-        trigger = SubElement(lap, 'TriggerMethod')
-        trigger.text = 'Manual'
-        lap.append(self.trackElement())
-
-    def LapExtension(self, ext, tag, text):
-        tpx = SubElement(ext, 'LX', {'xmlns': EXT_NS})
-        value = SubElement(tpx, tag)
-        value.text = str(text)
-
-    def trackElement(self):
-        t = Element('Track')
-        for p in self.points:
-            t.append(p.trackpointElement(self.startsec))
-        return t
-
 
 def output_name(iname):
-    # validate name ends with .CSV
+    # Validate name ends with .CSV
     if iname.lower().endswith(".csv"):
         prefix = iname[:-3]
         oname = prefix + "tcx"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-This script converts an RP3 dynamic rower CSV 
+This script converts a Concept2 rower CSV 
 workout file to a Garmin TCX file. The TCX file can be then imported
 into applications such as Strava or Garmin Connect.
 
@@ -18,7 +18,7 @@ along with the ISO date and time as follows:
     ./rp3-tcx.py [-t 2018-05-14_15:30:00] workout.CSV
 
 Otherwise, the system time is used as the start time.
-(This is necessary because RP3 doesn't include the time in the csv file.)
+(This is necessary because C2 doesn't include the time in the csv file.)
 
 This is very much inspired by Thomas O'Dowd's work with Lemond trainers.
     https://github.com/tpodowd/lemondcsv
@@ -49,14 +49,17 @@ class Stroke:
     represents one particular data point.
     """
     def __init__(self, csvrow):
-        self.secs = float(csvrow[7])
-        self.speed = self.paceToSpeed(float(csvrow[11]))
-        self.dist = float(csvrow[9])
-        self.power = float(csvrow[4])
-        self.heart = int(csvrow[14])
-        self.cadence = int(float(csvrow[6]))
-        self.calories = int(self.kJToCalories(float(csvrow[13])))
-        self.interval_id = int(csvrow[1])
+        self.secs = int(csvrow[1])
+        self.speed = self.paceToSpeed(float(csvrow[3]))
+        self.dist = int(csvrow[2])
+        self.heart = int(csvrow[7])
+        self.cadence = int(csvrow[6])
+
+        self.power = 0
+        try:
+            self.power = int(csvrow[4])
+        except:
+            self.power = 0
 
         def __str__(self):
             return "%d %f %d" % (self.secs, self.speed, self.power)
@@ -69,11 +72,8 @@ class Stroke:
 
         return meters_per_sec
 
-    def kJToCalories(self, kJ):
-        return kJ / 4.184
-
-    def getIntervalID(self):
-        return self.interval_id
+    def getSeconds(self):
+        return self.dist
 
     def trackpointElement(self, start):
         tp = Element('Trackpoint')
@@ -102,35 +102,18 @@ class Stroke:
         so we fail if the headers are unexpectedly ordered or
         missing or more than expected.
         """
-        if len(csvrow) != 25:
-            raise Exception("Expected 25 cols, got %d" % len(csvrow))
+        if len(csvrow) != 8:
+            raise Exception("Expected 8 cols, got %d" % len(csvrow))
         exp = []
 
-        exp.append("id")
-        exp.append("workout_interval_id")
-        exp.append("ref")
-        exp.append("stroke_number")
-        exp.append("power")
-        exp.append("avg_power")
-        exp.append("stroke_rate")
-        exp.append("time")
-        exp.append("stroke_length")
-        exp.append("distance")
-        exp.append("distance_per_stroke")
-        exp.append("estimated_500m_time")
-        exp.append("energy_per_stroke")
-        exp.append("energy_sum")
-        exp.append("pulse")
-        exp.append("work_per_pulse")
-        exp.append("peak_force")
-        exp.append("peak_force_pos")
-        exp.append("rel_peak_force_pos")
-        exp.append("drive_time")
-        exp.append("recover_time")
-        exp.append("k")
-        exp.append("curve_data")
-        exp.append("stroke_number_in_interval")
-        exp.append("avg_calculated_power")
+        exp.append("Number")
+        exp.append("Time (seconds)")
+        exp.append("Distance (meters)")
+        exp.append("Pace (seconds)")
+        exp.append("Watts")
+        exp.append("Cal/Hr")
+        exp.append("Stroke Rate")
+        exp.append("Heart Rate")
 
         if exp != csvrow:
             raise Exception("Unexpected Header %s != %s" % (exp, csvrow))
@@ -186,8 +169,6 @@ class Interval:
         dist.text = str(self.points[last].dist)
         ms = SubElement(lap, 'MaximumSpeed')
         ms.text = str(self.maxSpeed)
-        calories = SubElement(lap, 'Calories')
-        calories.text = str(self.points[last].calories)
         maxheart = SubElement(lap, 'MaximumHeartRateBpm')
         maxheartvalue = SubElement(maxheart, 'Value')
         maxheartvalue.text = str(self.maxHeart)
@@ -225,18 +206,21 @@ class Workout:
         Stroke.parseStrokeHdr(next(rdr))
         for row in rdr:
             p = Stroke(row)
-            ID = p.getIntervalID()
+            seconds = p.getSeconds()
 
             interval = None
             current_ID = 0
+            current_seconds = 0
             end_time = self.startsec
             if self.intervals:
                 interval = self.intervals[-1]
                 current_ID = interval.getIntervalID()
                 end_time = interval.endsec
 
-            if (ID > current_ID):
-                interval = Interval(ID, end_time)
+                current_seconds = interval.points[-1].getSeconds()
+
+            if (seconds < current_seconds) or (not self.intervals):
+                interval = Interval(current_ID + 1, end_time)
                 self.intervals.append(interval)
 
             interval.addStroke(p)
@@ -278,7 +262,7 @@ class Workout:
     def addCreator(self, act):
         c = SubElement(act, 'Creator', {'xsi:type': 'Device_t'})
         name = SubElement(c, 'Name')
-        name.text = 'RP3 Dynamic Rower'
+        name.text = 'Concept 2'
         unit = SubElement(c, 'UnitId')
         unit.text = '0'
         prd = SubElement(c, 'ProductID')
@@ -296,7 +280,7 @@ class Workout:
     def addAuthor(self, tcdb):
         a = SubElement(tcdb, 'Author', {'xsi:type': 'Application_t'})
         name = SubElement(a, 'Name')
-        name.text = 'RP3 CSV to TCX Convertor'
+        name.text = 'C2 CSV to TCX Convertor'
         build = SubElement(a, 'Build')
         ver = SubElement(build, 'Version')
         vmaj = SubElement(ver, 'VersionMajor')
